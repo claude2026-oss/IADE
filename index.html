@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="İade">
+<meta name="theme-color" content="#16181d">
+<title>İade Kontrol</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root{
+    --bg:#16181d; --panel:#20232a; --line:#333843; --text:#f3f1ea; --mute:#9aa0ad;
+    --ok:#1fbf6b; --okbg:#0f3b26; --bad:#ff4d4d; --badbg:#4a1515; --warn:#ffb020;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg);color:var(--text);
+    font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex;flex-direction:column;
+    padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);
+    overflow:hidden;
+  }
+  header{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--line)}
+  header .info{flex:1;font-size:13px;color:var(--mute);line-height:1.25;min-width:0}
+  header .info b{color:var(--text);font-size:15px}
+  button,.btn{
+    font:inherit;font-weight:600;font-size:14px;color:var(--text);background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer
+  }
+  button:active,.btn:active{transform:scale(.97)}
+  .primary{background:var(--ok);color:#06210f;border-color:var(--ok)}
+  #camWrap{position:relative;background:#000;flex:0 0 auto}
+  #reader{width:100%;height:26vh;min-height:150px;max-height:260px;overflow:hidden}
+  #reader video{width:100%!important;height:100%!important;object-fit:cover}
+  #camOff{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--panel);color:var(--mute);font-size:15px}
+  #camBtn{position:absolute;right:8px;bottom:8px;z-index:2}
+  .manual{display:flex;gap:8px;padding:8px 10px}
+  .manual input{
+    flex:1;min-width:0;font:inherit;font-size:18px;color:var(--text);background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+  }
+  #result{flex:1;overflow:auto;padding:0 10px 10px;-webkit-overflow-scrolling:touch}
+  .card{border-radius:16px;overflow:hidden;border:2px solid var(--line);background:var(--panel);margin-bottom:10px}
+  .card.ok{border-color:var(--ok)}
+  .card.bad{border-color:var(--bad)}
+  .band{padding:8px 14px;font-weight:700;font-size:15px;display:flex;justify-content:space-between;gap:8px}
+  .ok .band{background:var(--okbg);color:var(--ok)}
+  .bad .band{background:var(--badbg);color:var(--bad)}
+  .band .bc{font-variant-numeric:tabular-nums;font-weight:600;opacity:.9}
+  .title{padding:14px 14px 10px;font-size:clamp(26px,8vw,40px);line-height:1.12;font-weight:800;letter-spacing:-.01em;word-break:break-word}
+  .grid{display:grid;grid-template-columns:1fr 1.6fr;gap:10px;padding:0 14px 14px}
+  .cell{background:var(--bg);border-radius:12px;padding:10px 12px;min-width:0}
+  .cell small{display:block;color:var(--mute);font-size:13px;margin-bottom:2px}
+  .cell .v{font-size:clamp(34px,11vw,56px);font-weight:800;line-height:1.05;word-break:break-word}
+  .cell.ret .v{color:var(--warn)}
+  .cell input{
+    width:100%;font:inherit;font-size:clamp(28px,9vw,44px);font-weight:800;color:var(--warn);
+    background:transparent;border:0;border-bottom:2px dashed var(--line);padding:2px 0;outline:none;
+  }
+  .cell input:focus{border-bottom-color:var(--warn)}
+  .bad .title{color:var(--bad)}
+  .hint{color:var(--mute);text-align:center;padding:30px 20px;font-size:16px;line-height:1.5}
+  #flash{position:fixed;inset:0;pointer-events:none;opacity:0;transition:opacity .25s}
+  #flash.ok{background:rgba(31,191,107,.28);opacity:1}
+  #flash.bad{background:rgba(255,77,77,.32);opacity:1}
+  #toast{position:fixed;left:50%;bottom:calc(14px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#000;color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
+  #toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="info"><b id="cnt">Liste yok</b><br><span id="fname">Excel yükleyin</span></div>
+  <label class="btn primary" for="file">Excel yükle</label>
+  <input id="file" type="file" accept=".xlsx,.xls,.csv" hidden>
+  <button id="dl" title="Güncel listeyi indir">İndir</button>
+</header>
+
+<div id="camWrap">
+  <div id="reader"></div>
+  <div id="camOff">Kamera kapalı</div>
+  <button id="camBtn">Kamerayı aç</button>
+</div>
+
+<div class="manual">
+  <input id="manual" type="text" inputmode="numeric" placeholder="Barkodu elle yaz veya okut" autocomplete="off">
+  <button id="go" class="primary">Bul</button>
+</div>
+
+<div id="result">
+  <div class="hint">Barkodu okutun.<br>Kitabın satırı burada büyük görünecek.</div>
+</div>
+
+<div id="flash"></div>
+<div id="toast"></div>
+
+<script>
+(function(){
+  var KEY = 'iade_liste_v1';
+  var rows = [];        // [{bc, ad, adet, iade}]
+  var index = {};       // normalizedBarcode -> [row indexes]
+  var fileName = '';
+  var scanner = null, camOn = false;
+  var lastCode = '', lastTime = 0;
+
+  var $ = function(id){ return document.getElementById(id); };
+
+  /* ---------- yardımcılar ---------- */
+  function norm(s){ return String(s == null ? '' : s).trim().replace(/\s+/g,'').replace(/^0+/,''); }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function cellText(v){
+    if (v == null) return '';
+    if (typeof v === 'number') return Number.isInteger(v) ? v.toFixed(0) : String(v);
+    return String(v).trim();
+  }
+  function toast(msg){
+    var t = $('toast'); t.textContent = msg; t.className = 'show';
+    setTimeout(function(){ t.className = ''; }, 1800);
+  }
+  var audioCtx = null;
+  function beep(ok){
+    try{
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = ok ? 1100 : 220;
+      g.gain.value = 0.15; o.connect(g); g.connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + (ok ? 0.12 : 0.4));
+    }catch(e){}
+    try{ if (navigator.vibrate) navigator.vibrate(ok ? 40 : [80,60,80]); }catch(e){}
+  }
+  function flash(ok){
+    var f = $('flash'); f.className = ok ? 'ok' : 'bad';
+    setTimeout(function(){ f.className = ''; }, 250);
+  }
+
+  /* ---------- veri ---------- */
+  function buildIndex(){
+    index = {};
+    rows.forEach(function(r, i){
+      var k = norm(r.bc); if (!k) return;
+      (index[k] = index[k] || []).push(i);
+    });
+    $('cnt').textContent = rows.length ? (rows.length + ' kitap') : 'Liste yok';
+    $('fname').textContent = fileName || 'Excel yükleyin';
+  }
+  function save(){
+    try{ localStorage.setItem(KEY, JSON.stringify({rows: rows, fileName: fileName})); }
+    catch(e){ toast('Kaydedilemedi (hafıza dolu olabilir)'); }
+  }
+  function load(){
+    try{
+      var d = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (d && d.rows){ rows = d.rows; fileName = d.fileName || ''; }
+    }catch(e){}
+    buildIndex();
+  }
+
+  /* ---------- Excel yükleme ---------- */
+  $('file').addEventListener('change', function(ev){
+    var f = ev.target.files[0]; if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function(e){
+      try{
+        var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        var data = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:''});
+        var out = [];
+        data.forEach(function(r, i){
+          var bc = cellText(r[0]);
+          if (!bc) return;
+          // başlık satırı: ilk satırda A hücresi rakam değilse atla
+          if (i === 0 && !/^\d{6,}$/.test(bc)) return;
+          out.push({bc: bc, ad: cellText(r[1]), adet: cellText(r[2]), iade: cellText(r[3])});
+        });
+        if (!out.length){ toast('Satır bulunamadı'); return; }
+        rows = out; fileName = f.name; buildIndex(); save();
+        $('result').innerHTML = '<div class="hint">' + out.length + ' satır yüklendi.<br>Barkodu okutun.</div>';
+        toast(out.length + ' satır yüklendi');
+      }catch(err){ toast('Dosya okunamadı'); }
+      $('file').value = '';
+    };
+    reader.readAsArrayBuffer(f);
+  });
+
+  /* ---------- sonuç gösterme ---------- */
+  function show(code){
+    var k = norm(code);
+    var hits = index[k];
+    var box = $('result');
+    if (!hits){
+      box.innerHTML =
+        '<div class="card bad"><div class="band"><span>LİSTEDE YOK</span><span class="bc">' + esc(code) + '</span></div>' +
+        '<div class="title">Bu barkod iade listesinde yok</div></div>';
+      flash(false); beep(false); return;
+    }
+    var html = '';
+    hits.forEach(function(i){
+      var r = rows[i];
+      html +=
+        '<div class="card ok"><div class="band"><span>BULUNDU</span><span class="bc">' + esc(r.bc) + '</span></div>' +
+        '<div class="title">' + esc(r.ad || '(ad yok)') + '</div>' +
+        '<div class="grid">' +
+          '<div class="cell"><small>Adet</small><div class="v">' + esc(r.adet || '-') + '</div></div>' +
+          '<div class="cell ret"><small>İade adet / açıklama (dokunup düzenle)</small>' +
+            '<input data-i="' + i + '" value="' + esc(r.iade) + '" enterkeyhint="done"></div>' +
+        '</div></div>';
+    });
+    box.innerHTML = html;
+    box.scrollTop = 0;
+    flash(true); beep(true);
+  }
+  $('result').addEventListener('change', function(e){
+    var el = e.target;
+    if (el.tagName === 'INPUT' && el.dataset.i != null){
+      rows[+el.dataset.i].iade = el.value; save(); toast('Kaydedildi');
+    }
+  });
+  $('result').addEventListener('keydown', function(e){
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.target.blur();
+  });
+
+  function handle(code){
+    code = String(code || '').trim(); if (!code) return;
+    var now = Date.now();
+    if (code === lastCode && now - lastTime < 1500) return; // çift okumayı engelle
+    lastCode = code; lastTime = now;
+    show(code);
+  }
+
+  /* ---------- elle giriş / harici okuyucu ---------- */
+  function manualGo(){
+    var v = $('manual').value; $('manual').value = ''; lastCode = '';
+    handle(v);
+  }
+  $('go').addEventListener('click', manualGo);
+  $('manual').addEventListener('keydown', function(e){ if (e.key === 'Enter') manualGo(); });
+
+  /* ---------- kamera ---------- */
+  function startCam(){
+    if (camOn) return;
+    if (typeof Html5Qrcode === 'undefined'){ toast('Kamera kütüphanesi yüklenemedi (internet?)'); return; }
+    scanner = scanner || new Html5Qrcode('reader', {
+      formatsToSupport: [
+        Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.ITF
+      ],
+      useBarCodeDetectorIfSupported: true,
+      verbose: false
+    });
+    scanner.start(
+      {facingMode: 'environment'},
+      {fps: 15, qrbox: function(w, h){ return {width: Math.floor(w * 0.9), height: Math.floor(h * 0.6)}; }, aspectRatio: 1.7778},
+      function(text){ handle(text); },
+      function(){}
+    ).then(function(){
+      camOn = true; $('camOff').style.display = 'none'; $('camBtn').textContent = 'Kamerayı kapat';
+    }).catch(function(err){
+      toast('Kamera açılamadı: izin verin');
+    });
+  }
+  function stopCam(){
+    if (!camOn || !scanner) return;
+    scanner.stop().then(function(){
+      camOn = false; $('camOff').style.display = 'flex'; $('camBtn').textContent = 'Kamerayı aç';
+    }).catch(function(){});
+  }
+  $('camBtn').addEventListener('click', function(){ camOn ? stopCam() : startCam(); });
+
+  /* ---------- Excel indir ---------- */
+  $('dl').addEventListener('click', function(){
+    if (!rows.length){ toast('Liste boş'); return; }
+    var aoa = [['Barkod','Kitap Adı','Adet','İade Adet / Açıklama']].concat(
+      rows.map(function(r){ return [r.bc, r.ad, r.adet, r.iade]; })
+    );
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{wch:16},{wch:50},{wch:8},{wch:28}];
+    var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'İade');
+    XLSX.writeFile(wb, 'iade_guncel.xlsx');
+  });
+
+  load();
+  if ('serviceWorker' in navigator) { /* internetsiz çalışma için ileride eklenebilir */ }
+})();
+</script>
+</body>
+</html>
