@@ -9,7 +9,6 @@
 <meta name="theme-color" content="#16181d">
 <title>İade Kontrol</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <style>
   :root{
     --bg:#16181d; --panel:#20232a; --line:#333843; --text:#f3f1ea; --mute:#9aa0ad;
@@ -34,10 +33,15 @@
   button:active,.btn:active{transform:scale(.97)}
   .primary{background:var(--ok);color:#06210f;border-color:var(--ok)}
   #camWrap{position:relative;background:#000;flex:0 0 auto}
-  #reader{width:100%;height:36vh;min-height:200px;max-height:340px;overflow:hidden}
-  #reader video{width:100%!important;height:100%!important;object-fit:cover}
-  #camOff{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:var(--panel);color:var(--mute);font-size:15px}
-  #camBtn{position:absolute;right:8px;bottom:8px;z-index:2}
+  #camWrap{border:5px solid #333;transition:border-color .1s}
+  #camWrap.ok{border-color:var(--ok)} #camWrap.bad{border-color:var(--bad)}
+  #cam{position:relative;height:30vh;min-height:170px;max-height:320px;background:#000;overflow:hidden}
+  #cam video{width:100%;height:100%;object-fit:cover;display:block}
+  #cam .line{position:absolute;left:10%;right:10%;top:50%;height:2px;background:rgba(255,60,60,.8);box-shadow:0 0 8px red;pointer-events:none}
+  #start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000a}
+  #start button{background:var(--ok);color:#06210f;border-color:var(--ok);font-size:20px;padding:16px 24px}
+  #camTools{position:absolute;right:8px;bottom:8px;display:flex;gap:6px;z-index:2}
+  #camTools button{padding:8px 10px;background:#000a}
   .manual{display:flex;gap:8px;padding:8px 10px}
   .manual input{
     flex:1;min-width:0;font:inherit;font-size:18px;color:var(--text);background:var(--panel);
@@ -81,9 +85,16 @@
 </header>
 
 <div id="camWrap">
-  <div id="reader"></div>
-  <div id="camOff">Kamera kapalı</div>
-  <button id="camBtn">Kamerayı aç</button>
+  <div id="cam">
+    <video id="v" playsinline muted autoplay></video>
+    <div class="line"></div>
+    <div id="start"><button id="bStart">▶ KAMERAYI BAŞLAT</button></div>
+    <div id="camTools">
+      <button id="bZoom" hidden>🔍</button>
+      <button id="bTorch" hidden>🔦</button>
+      <button id="bStop" hidden>⏹</button>
+    </div>
+  </div>
 </div>
 
 <div class="manual">
@@ -133,8 +144,8 @@
     try{ if (navigator.vibrate) navigator.vibrate(ok ? 40 : [80,60,80]); }catch(e){}
   }
   function flash(ok){
-    var f = $('flash'); f.className = ok ? 'ok' : 'bad';
-    setTimeout(function(){ f.className = ''; }, 250);
+    var f = $('flash'), c = $('camWrap'); f.className = ok ? 'ok' : 'bad'; c.className = ok ? 'ok' : 'bad';
+    setTimeout(function(){ f.className = ''; c.className = ''; }, 400);
   }
 
   /* ---------- veri ---------- */
@@ -239,48 +250,110 @@
   $('go').addEventListener('click', manualGo);
   $('manual').addEventListener('keydown', function(e){ if (e.key === 'Enter') manualGo(); });
 
-  /* ---------- kamera ---------- */
-  function startCam(){
-    if (camOn) return;
-    if (typeof Html5Qrcode === 'undefined'){ toast('Kamera kütüphanesi yüklenemedi (internet?)'); return; }
-    scanner = scanner || new Html5Qrcode('reader', {
-      formatsToSupport: [
-        Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
-        Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
-        Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39,
-        Html5QrcodeSupportedFormats.ITF
-      ],
-      useBarCodeDetectorIfSupported: true,
-      verbose: false
-    });
-    scanner.start(
-      {facingMode: 'environment'},
-      {
-        fps: 10,
-        disableFlip: false,
-        videoConstraints: {
-          facingMode: 'environment',
-          width: {ideal: 1920},
-          height: {ideal: 1080},
-          focusMode: 'continuous',
-          advanced: [{focusMode: 'continuous'}]
-        }
-      },
-      function(text){ handle(text); },
-      function(){}
-    ).then(function(){
-      camOn = true; $('camOff').style.display = 'none'; $('camBtn').textContent = 'Kamerayı kapat';
-    }).catch(function(err){
-      toast('Kamera açılamadı: izin verin');
+  /* ---------- kamera (terminal uygulamasındaki ayarlar) ---------- */
+  var stream = null, running = false, det = null, zx = null, torchOn = false;
+  var zoomV = 1, zmax = 1, loopId = 0;
+
+  function loadZX(){
+    return new Promise(function(res){
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+      s.onload = function(){
+        var Z = ZXing, h = new Map(), F = Z.BarcodeFormat;
+        h.set(Z.DecodeHintType.POSSIBLE_FORMATS, [F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.CODE_128,F.CODE_39,F.ITF,F.QR_CODE]);
+        var mr = new Z.MultiFormatReader(); mr.setHints(h);
+        zx = {mr: mr, cv: document.createElement('canvas')}; res();
+      };
+      s.onerror = function(){ toast('Okuyucu kütüphanesi yüklenemedi (internet gerekli)'); res(); };
+      document.head.appendChild(s);
     });
   }
+
+  async function startCam(){
+    try{ audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); }catch(e){}
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {facingMode: {ideal: 'environment'}, width: {ideal: 1920}, height: {ideal: 1080}}
+      });
+    }catch(e){
+      alert('Kamera açılamadı: ' + e.message + '\n(Sayfa https üzerinden açılmalı ve kamera izni verilmeli)');
+      return;
+    }
+    var v = $('v'); v.srcObject = stream; try{ await v.play(); }catch(e){}
+    $('start').style.display = 'none'; $('bStop').hidden = false;
+    var tr = stream.getVideoTracks()[0];
+    try{
+      var caps = tr.getCapabilities ? tr.getCapabilities() : {};
+      if (caps.focusMode && caps.focusMode.indexOf('continuous') >= 0)
+        tr.applyConstraints({advanced: [{focusMode: 'continuous'}]}).catch(function(){});
+      if (caps.torch) $('bTorch').hidden = false;
+      if (caps.zoom){ zmax = caps.zoom.max; $('bZoom').hidden = false; setZoom(Math.min(2, zmax)); }
+    }catch(e){}
+    try{ if (navigator.wakeLock) navigator.wakeLock.request('screen'); }catch(e){}
+    if ('BarcodeDetector' in window){
+      try{ det = new BarcodeDetector({formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code']}); }
+      catch(e){ det = null; }
+    }
+    if (!det && !zx) await loadZX();
+    running = true; tick(++loopId);
+  }
+
   function stopCam(){
-    if (!camOn || !scanner) return;
-    scanner.stop().then(function(){
-      camOn = false; $('camOff').style.display = 'flex'; $('camBtn').textContent = 'Kamerayı aç';
-    }).catch(function(){});
+    running = false; loopId++;
+    if (stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+    $('v').srcObject = null;
+    $('start').style.display = 'flex';
+    $('bStop').hidden = true; $('bZoom').hidden = true; $('bTorch').hidden = true;
+    torchOn = false;
   }
-  $('camBtn').addEventListener('click', function(){ camOn ? stopCam() : startCam(); });
+
+  async function tick(id){
+    if (!running || id !== loopId) return;
+    var v = $('v');
+    if (v.readyState >= 2){
+      try{
+        if (det){
+          var r = await det.detect(v);
+          if (r.length) handle(r[0].rawValue);
+        } else if (zx){
+          var vw = v.videoWidth, vh = v.videoHeight;
+          var sx = vw*.1, sy = vh*.25, sw = vw*.8, sh = vh*.5, cv = zx.cv;
+          cv.width = Math.min(800, Math.round(sw));
+          cv.height = Math.round(cv.width * sh / sw);
+          cv.getContext('2d', {willReadFrequently: true}).drawImage(v, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+          try{
+            var bm = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(cv)));
+            handle(zx.mr.decode(bm).getText());
+          }catch(e){}
+        }
+      }catch(e){}
+    }
+    setTimeout(function(){ tick(id); }, det ? 40 : 120);
+  }
+
+  function setZoom(z){
+    zoomV = z; $('bZoom').textContent = '🔍' + (Math.round(z*10)/10) + 'x';
+    if (stream) stream.getVideoTracks()[0].applyConstraints({advanced: [{zoom: z}]}).catch(function(){});
+  }
+  $('bZoom').addEventListener('click', function(){
+    var z = zoomV + 1; if (z > Math.min(4, zmax) + .01) z = 1; setZoom(z);
+  });
+  $('bTorch').addEventListener('click', function(){
+    torchOn = !torchOn;
+    stream.getVideoTracks()[0].applyConstraints({advanced: [{torch: torchOn}]}).catch(function(){});
+  });
+  $('cam').addEventListener('click', function(e){
+    if (!stream || e.target.closest('button')) return;
+    var t = stream.getVideoTracks()[0];
+    t.applyConstraints({advanced: [{focusMode: 'single-shot'}]}).catch(function(){});
+    setTimeout(function(){ t.applyConstraints({advanced: [{focusMode: 'continuous'}]}).catch(function(){}); }, 1200);
+  });
+  $('bStart').addEventListener('click', startCam);
+  $('bStop').addEventListener('click', stopCam);
+  document.addEventListener('visibilitychange', function(){
+    if (!document.hidden && stream && !stream.active) location.reload();
+  });
 
   /* ---------- Excel indir ---------- */
   $('dl').addEventListener('click', function(){
