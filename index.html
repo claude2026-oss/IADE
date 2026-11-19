@@ -61,11 +61,12 @@
   .cell small{display:block;color:var(--mute);font-size:13px;margin-bottom:2px}
   .cell .v{font-size:clamp(34px,11vw,56px);font-weight:800;line-height:1.05;word-break:break-word}
   .cell.ret .v{color:var(--warn)}
-  .cell input{
-    width:100%;font:inherit;font-size:clamp(28px,9vw,44px);font-weight:800;color:var(--warn);
+  .cell textarea{
+    width:100%;display:block;font:inherit;font-size:clamp(24px,7.5vw,38px);font-weight:800;line-height:1.15;color:var(--warn);
     background:transparent;border:0;border-bottom:2px dashed var(--line);padding:2px 0;outline:none;
+    resize:none;overflow:hidden;min-height:1.3em;word-break:break-word;
   }
-  .cell input:focus{border-bottom-color:var(--warn)}
+  .cell textarea:focus{border-bottom-color:var(--warn)}
   .bad .title{color:var(--bad)}
   .hint{color:var(--mute);text-align:center;padding:30px 20px;font-size:16px;line-height:1.5}
   #flash{position:fixed;inset:0;pointer-events:none;opacity:0;transition:opacity .25s}
@@ -217,21 +218,23 @@
         '<div class="grid">' +
           '<div class="cell"><small>Adet</small><div class="v">' + esc(r.adet || '-') + '</div></div>' +
           '<div class="cell ret"><small>İade adet / açıklama (dokunup düzenle)</small>' +
-            '<input data-i="' + i + '" value="' + esc(r.iade) + '" enterkeyhint="done"></div>' +
+            '<textarea data-i="' + i + '" rows="1">' + esc(r.iade) + '</textarea></div>' +
         '</div></div>';
     });
     box.innerHTML = html;
     box.scrollTop = 0;
+    box.querySelectorAll('textarea').forEach(grow);
     flash(true); beep(true);
   }
+  function grow(el){ el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+  $('result').addEventListener('input', function(e){
+    if (e.target.tagName === 'TEXTAREA') grow(e.target);
+  });
   $('result').addEventListener('change', function(e){
     var el = e.target;
-    if (el.tagName === 'INPUT' && el.dataset.i != null){
+    if (el.tagName === 'TEXTAREA' && el.dataset.i != null){
       rows[+el.dataset.i].iade = el.value; save(); toast('Kaydedildi');
     }
-  });
-  $('result').addEventListener('keydown', function(e){
-    if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.target.blur();
   });
 
   function handle(code){
